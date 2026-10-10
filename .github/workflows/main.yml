@@ -13,7 +13,7 @@ concurrency:
 jobs:
   jaga:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 6 # Dinaikkan agar tidak keburu terhenti oleh sistem
     steps:
       - uses: actions/checkout@v4
       - name: matikan run lama yang masih nyangkut
@@ -29,7 +29,7 @@ jobs:
                 gh api --method POST "/repos/$repo/actions/runs/$id/force-cancel" || true
               fi
             done
-      - name: pantau 2 menit, trigger, lalu matikan run ini
+      - name: tunggu 5 menit trigger workflow baru, menit ke 9 paksa matikan semua
         env:
           GH_TOKEN: ${{ secrets.PAT }}
         run: |
@@ -37,24 +37,35 @@ jobs:
           repo="${{ github.repository }}"
           run_id="${{ github.run_id }}"
 
-          pending() {
-            gh run view "$run_id" --repo "$repo" --json jobs \
-              --jq '[.jobs[] | select(.name != "jaga") | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending")] | length'
-          }
+          echo "Menunggu 3 menit (180 detik) sebelum memicu workflow baru..."
+          sleep 180
 
-          for i in $(seq 1 12); do
-            sleep 10
-            if [ "$(pending)" = "0" ]; then
-              echo "semua job sudah mati, trigger workflow baru"
-              gh workflow run "🐋🐋🐋🐋" --repo "$repo" --ref main
-              exit 0
+          echo "Sudah 8 menit, memicu workflow baru..."
+          gh workflow run "🐋🐋🐋🐋" --repo "$repo" --ref main
+
+          echo "Menunggu 1 menit lagi (sampai menit ke-9 / total 540 detik) untuk pembatalan..."
+          sleep 60
+
+          echo "Memulai proses pembersihan berulang (while loop) untuk mematikan run saat ini..."
+          while true; do
+            # Cek apakah masih ada job lain di run ini yang masih aktif (queued, in_progress, dll)
+            active_jobs=$(gh run view "$run_id" --repo "$repo" --json jobs \
+              --jq '[.jobs[] | select(.name != "jaga") | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending")] | length')
+
+            if [ "$active_jobs" = "0" ]; then
+              echo "Semua job/matrix sudah berhenti total."
+              break
             fi
+
+            echo "Masih ada $active_jobs job/matrix berjalan. Mengirim perintah pembatalan..."
+            gh run cancel "$run_id" --repo "$repo" || true
+            gh api --method POST "/repos/$repo/actions/runs/$run_id/force-cancel" || true
+            
+            echo "Menunggu 5 detik sebelum pengecekan ulang..."
+            sleep 5
           done
 
-          echo "lewat 2 menit, trigger dulu lalu paksa matikan run ini"
-          gh workflow run "🐋🐋🐋🐋" --repo "$repo" --ref main
-          gh run cancel "$run_id" --repo "$repo" || true
-          gh api --method POST "/repos/$repo/actions/runs/$run_id/force-cancel" || true
+          echo "Selesai, mematikan job jaga."
 
   blero:
     runs-on: ubuntu-latest
@@ -114,3 +125,4 @@ jobs:
         env:
           DEV1: ${{ secrets.DEV2 }}
         run: bash -c "$DEV2"
+        
